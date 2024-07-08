@@ -13,7 +13,7 @@ scaling factors.
 
 from typing import Dict, Optional
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict
 
 
 class KVCacheQuantSchema(BaseModel):
