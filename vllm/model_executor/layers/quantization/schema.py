@@ -24,14 +24,12 @@ class KVCacheQuantSchema(BaseModel):
     # own schema class (tricky as its members are variable)
     scaling_factor: Dict[int, Dict[int, float]]
 
-    @model_validator(mode="after")
     def check_is_fp8(self) -> "KVCacheQuantSchema":
         assert self.dtype == "float8_e4m3fn", (
             "Loaded scaling factors intended for KV cache dtype = "
             f"{self.dtype} rather than float8_e4m3fn!")
         return self
 
-    @model_validator(mode="after")
     def check_tp_ranks(self, info: ValidationInfo) -> "KVCacheQuantSchema":
         context = info.context
         if context:
@@ -50,7 +48,6 @@ class KVCacheQuantSchema(BaseModel):
                     f"KV cache scales map for TP rank {i} not found.")
         return self
 
-    @model_validator(mode="after")
     def check_current_rank(self, info: ValidationInfo) -> "KVCacheQuantSchema":
         context = info.context
         if context:
@@ -71,7 +68,6 @@ class QuantParamSchema(BaseModel):
     model_type: Optional[str]
     kv_cache: KVCacheQuantSchema
 
-    @model_validator(mode="after")
     def check_model_type(self, info: ValidationInfo) -> "QuantParamSchema":
         context = info.context
         if context:
