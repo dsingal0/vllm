@@ -65,15 +65,14 @@ class RequestLogger:
         is_streaming: bool = False,
         delta: bool = False,
     ) -> None:
-        # Truncate outputs to 64 tokens for output logging
-        max_output_log_len = 64
-        if max_output_log_len is not None:
-            if outputs is not None:
-                outputs = outputs[:max_output_log_len]
+        # Truncate outputs to the minimum of max_log_len and 64 tokens
+        max_output_log_len = min(self.max_log_len or 64, 64)
+        if outputs is not None:
+            outputs = outputs[:max_output_log_len]
 
-            if output_token_ids is not None:
-                # Convert to list and apply truncation
-                output_token_ids = list(output_token_ids)[:max_output_log_len]
+        if output_token_ids is not None:
+            # Convert to list and apply truncation
+            output_token_ids = list(output_token_ids)[:max_output_log_len]
 
         stream_info = ""
         if is_streaming:
