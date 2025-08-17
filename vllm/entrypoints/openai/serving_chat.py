@@ -506,11 +506,14 @@ class OpenAIServingChat(OpenAIServing):
         # Always track previous_texts for comprehensive output logging
         previous_texts = [""] * num_choices
 
+        # Track all token IDs for final logging
+        all_output_token_ids = [[] for _ in range(num_choices)]
+
         # Only one of these will be used, thus previous_texts and
         # all_previous_token_ids will not be used twice in the same iteration.
         if tool_choice_auto or self.reasoning_parser:
             # These are only required in "auto" tool choice case
-            all_previous_token_ids = [[]] * num_choices
+            all_previous_token_ids = [[] for _ in range(num_choices)]
             # For reasoning parser and tool call all enabled
             added_content_delta_arr = [False] * num_choices
             reasoning_end_arr = [False] * num_choices
@@ -886,6 +889,10 @@ class OpenAIServingChat(OpenAIServing):
                         assert previous_texts is not None
                         previous_texts[i] += delta_text
 
+                    # Collect all output token IDs for final logging
+                    if all_output_token_ids is not None:
+                        all_output_token_ids[i].extend(output.token_ids)
+
                     # set the previous values for the next iteration
                     previous_num_tokens[i] += len(output.token_ids)
 
@@ -897,26 +904,8 @@ class OpenAIServingChat(OpenAIServing):
                         continue
 
                     # Log streaming delta if output logging is enabled
-                    if self.enable_log_outputs and self.request_logger:
-                        delta_content = ""
-                        if delta_message.content:
-                            delta_content = delta_message.content
-                        elif delta_message.tool_calls:
-                            delta_content = "".join(
-                                tc.function.arguments
-                                for tc in delta_message.tool_calls
-                                if tc.function and tc.function.arguments)
-
-                        if delta_content:
-                            self.request_logger.log_outputs(
-                                request_id=request_id,
-                                outputs=delta_content,
-                                output_token_ids=as_list(output.token_ids),
-                                finish_reason=output.finish_reason,
-                                stop_reason=output.stop_reason,
-                                is_streaming=True,
-                                delta=True,
-                            )
+                    # Only log the final output, not every streaming delta
+                    pass
 
                     if output.finish_reason is None:
                         # Send token-by-token response for each request.n
@@ -1051,8 +1040,11 @@ class OpenAIServingChat(OpenAIServing):
                     self.request_logger.log_outputs(
                         request_id=request_id,
                         outputs=full_text,
-                        output_token_ids=
-                        None,  # Consider also logging all token IDs
+                        output_token_ids=(
+                            all_output_token_ids[i] 
+                            if all_output_token_ids and i < len(all_output_token_ids)
+                            else None
+                        ),
                         finish_reason="streaming_complete",
                         is_streaming=True,
                         delta=False,
