@@ -275,10 +275,21 @@ class OpenAIServingChat(OpenAIServing):
                         max_tokens, self.model_config.logits_processor_pattern,
                         self.default_sampling_params)
 
+                # Prepare extra fields for logging
+                extra_fields = {}
+                if hasattr(request, 'stream'):
+                    extra_fields['stream'] = request.stream
+                # max_completion_tokens takes precedence over max_tokens
+                if hasattr(request, 'max_completion_tokens') and request.max_completion_tokens is not None:
+                    extra_fields['max_completion_tokens'] = request.max_completion_tokens
+                elif hasattr(request, 'max_tokens') and request.max_tokens is not None:
+                    extra_fields['max_tokens'] = request.max_tokens
+
                 self._log_inputs(request_id,
                                  request_prompts[i],
                                  params=sampling_params,
-                                 lora_request=lora_request)
+                                 lora_request=lora_request,
+                                 extra_fields=extra_fields)
 
                 trace_headers = (None if raw_request is None else await
                                  self._get_trace_headers(raw_request.headers))
@@ -902,6 +913,7 @@ class OpenAIServingChat(OpenAIServing):
                                 outputs=delta_content,
                                 output_token_ids=as_list(output.token_ids),
                                 finish_reason=output.finish_reason,
+                                stop_reason=output.stop_reason,
                                 is_streaming=True,
                                 delta=True,
                             )
@@ -1334,6 +1346,7 @@ class OpenAIServingChat(OpenAIServing):
                         outputs=output_text,
                         output_token_ids=output_token_ids,
                         finish_reason=choice.finish_reason,
+                        stop_reason=choice.stop_reason,
                         is_streaming=False,
                         delta=False,
                     )

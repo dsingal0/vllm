@@ -191,11 +191,19 @@ class OpenAIServingCompletion(OpenAIServing):
 
                 request_id_item = f"{request_id}-{i}"
 
+                # Prepare extra fields for logging
+                extra_fields = {}
+                if hasattr(request, 'stream'):
+                    extra_fields['stream'] = request.stream
+                if hasattr(request, 'max_tokens') and request.max_tokens is not None:
+                    extra_fields['max_tokens'] = request.max_tokens
+
                 self._log_inputs(
                     request_id_item,
                     request_prompts[i],
                     params=sampling_params,
                     lora_request=lora_request,
+                    extra_fields=extra_fields,
                 )
 
                 trace_headers = (None if raw_request is None else await

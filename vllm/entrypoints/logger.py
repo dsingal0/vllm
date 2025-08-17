@@ -28,6 +28,7 @@ class RequestLogger:
         params: Optional[Union[SamplingParams, PoolingParams,
                                BeamSearchParams]],
         lora_request: Optional[LoRARequest],
+        extra_fields: Optional[dict] = None,
     ) -> None:
         max_log_len = self.max_log_len
         if max_log_len is not None:
@@ -37,13 +38,22 @@ class RequestLogger:
             if prompt_token_ids is not None:
                 prompt_token_ids = prompt_token_ids[:max_log_len]
 
+        # Add extra fields to the log message if provided
+        extra_info = ""
+        if extra_fields:
+            extra_parts = []
+            for key, value in extra_fields.items():
+                extra_parts.append(f"{key}: {value}")
+            if extra_parts:
+                extra_info = ", " + ", ".join(extra_parts)
+
         logger.info(
             "Received request %s: prompt: %r, "
             "params: %s, prompt_token_ids: %s, "
             "prompt_embeds shape: %s, "
-            "lora_request: %s.", request_id, prompt, params, prompt_token_ids,
+            "lora_request: %s%s.", request_id, prompt, params, prompt_token_ids,
             prompt_embeds.shape if prompt_embeds is not None else None,
-            lora_request)
+            lora_request, extra_info)
 
     def log_outputs(
         self,
@@ -51,6 +61,7 @@ class RequestLogger:
         outputs: str,
         output_token_ids: Optional[Sequence[int]],
         finish_reason: Optional[str] = None,
+        stop_reason: Optional[str] = None,
         is_streaming: bool = False,
         delta: bool = False,
     ) -> None:
@@ -68,12 +79,18 @@ class RequestLogger:
             stream_info = (" (streaming delta)"
                            if delta else " (streaming complete)")
 
+        # Add stop_reason to the log message if provided
+        stop_reason_info = ""
+        if stop_reason is not None:
+            stop_reason_info = f", stop_reason: {stop_reason}"
+
         logger.info(
             "Generated response %s%s: output: %r, "
-            "output_token_ids: %s, finish_reason: %s",
+            "output_token_ids: %s, finish_reason: %s%s",
             request_id,
             stream_info,
             outputs,
             output_token_ids,
             finish_reason,
+            stop_reason_info,
         )
