@@ -83,7 +83,7 @@ class OpenAIServingResponses(OpenAIServing):
         tool_server: Optional[ToolServer] = None,
         enable_prompt_tokens_details: bool = False,
         enable_force_include_usage: bool = False,
-        enable_log_outputs: bool = False,
+        enable_log_outputs: bool = True,
     ) -> None:
         super().__init__(
             engine_client=engine_client,
@@ -520,6 +520,7 @@ class OpenAIServingResponses(OpenAIServing):
                     outputs=output_text,
                     output_token_ids=final_output.token_ids,
                     finish_reason=final_output.finish_reason,
+                    stop_reason=final_output.stop_reason,
                     is_streaming=False,
                     delta=False,
                 )

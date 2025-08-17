@@ -74,7 +74,7 @@ class OpenAIServingChat(OpenAIServing):
         tool_parser: Optional[str] = None,
         enable_prompt_tokens_details: bool = False,
         enable_force_include_usage: bool = False,
-        enable_log_outputs: bool = False,
+        enable_log_outputs: bool = True,
     ) -> None:
         super().__init__(engine_client=engine_client,
                          model_config=model_config,
