@@ -268,6 +268,16 @@ class InputProcessingContext:
     )
     """Lock for thread-safe access to timing_stats_registry."""
 
+    _hf_processor_lock: threading.Lock = field(
+        default_factory=threading.Lock, compare=False, repr=False
+    )
+    """Lock to serialize HF processor calls that use the tokenizer.
+
+    The HuggingFace fast tokenizer is not thread-safe (Rust RefCell causes
+    "RuntimeError: Already borrowed" under concurrent access).
+    See: https://github.com/huggingface/tokenizers/issues/537
+    """
+
     def get_tokenizer(self) -> TokenizerLike:
         if self.tokenizer is None:
             raise ValueError(
@@ -418,9 +428,6 @@ class InputProcessingContext:
         hf_processor: ProcessorMixin,
         data: Mapping[str, object],
         kwargs: Mapping[str, object] = {},
-        *,
-        num_tries: int = 1,
-        max_tries: int = 5,
     ) -> BatchFeature | JSONTree:
         """
         Call `hf_processor` on the prompt `data`
@@ -438,30 +445,14 @@ class InputProcessingContext:
         )
 
         try:
-            output = hf_processor(**data, **allowed_kwargs, return_tensors="pt")
+            # Serialize HF processor calls to avoid "Already borrowed"
+            # RuntimeError from the non-thread-safe HF fast tokenizer.
+            # See: https://github.com/huggingface/tokenizers/issues/537
+            with self._hf_processor_lock:
+                output = hf_processor(
+                    **data, **allowed_kwargs, return_tensors="pt"
+                )
         except Exception as exc:
-            # See https://github.com/huggingface/tokenizers/issues/537
-            if (
-                isinstance(exc, RuntimeError)
-                and exc
-                and exc.args[0] == "Already borrowed"
-                and num_tries < max_tries
-            ):
-                logger.warning(
-                    "Failed to acquire tokenizer in current thread. "
-                    "Retrying (%d/%d)...",
-                    num_tries,
-                    max_tries,
-                )
-                time.sleep(0.5)
-                return self.call_hf_processor(
-                    hf_processor,
-                    data,
-                    kwargs,
-                    num_tries=num_tries + 1,
-                    max_tries=max_tries,
-                )
-
             msg = (
                 f"Failed to apply {type(hf_processor).__name__} "
                 f"on data={data} with kwargs={allowed_kwargs}"
