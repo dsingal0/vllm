@@ -1551,33 +1551,53 @@ class BaseMultiModalProcessor(ABC, Generic[_I]):
                 mm_hashes=mm_hashes,
             )
 
-        # NOTE: `prompt` does not correspond to `mm_missing_data_items`,
-        # so we can't apply prompt updates until the new multimodal
-        # items are combined with the cached multimodal items
-        (
-            prompt_ids,
-            mm_missing_processed_data,
-            is_update_applied,
-        ) = self._apply_hf_processor_main(
-            prompt=prompt,
-            mm_items=mm_missing_data_items,
-            hf_processor_mm_kwargs=hf_processor_mm_kwargs,
-            tokenization_kwargs=tokenization_kwargs,
-            enable_hf_prompt_update=False,
+        # When all items are cached, skip the HF processor call for MM data
+        # entirely. Calling it with empty items causes errors because
+        # get_dummy_text({}) returns empty text for many models, and HF
+        # processors don't handle empty text/no-MM-data calls well.
+        all_cached = all(
+            all(cached) for cached in mm_is_cached.values()
         )
 
-        mm_missing_kwargs = MultiModalKwargsItems.from_hf_inputs(
-            mm_missing_processed_data,
-            self._get_mm_fields_config(
-                mm_missing_processed_data, hf_processor_mm_kwargs
-            ),
-        )
+        if all_cached:
+            # Only tokenize the prompt - all MM data comes from cache
+            if isinstance(prompt, str):
+                prompt_ids = self._apply_hf_processor_text_only(
+                    prompt, tokenization_kwargs
+                )
+            else:
+                prompt_ids = self._apply_hf_processor_tokens_only(prompt)
+            is_update_applied = False
+            mm_missing_kwargs = MultiModalKwargsItems({})
+            mm_missing_prompt_updates: MultiModalPromptUpdates = {}
+        else:
+            # NOTE: `prompt` does not correspond to `mm_missing_data_items`,
+            # so we can't apply prompt updates until the new multimodal
+            # items are combined with the cached multimodal items
+            (
+                prompt_ids,
+                mm_missing_processed_data,
+                is_update_applied,
+            ) = self._apply_hf_processor_main(
+                prompt=prompt,
+                mm_items=mm_missing_data_items,
+                hf_processor_mm_kwargs=hf_processor_mm_kwargs,
+                tokenization_kwargs=tokenization_kwargs,
+                enable_hf_prompt_update=False,
+            )
 
-        mm_missing_prompt_updates = self._get_mm_prompt_updates(
-            mm_missing_data_items,
-            hf_processor_mm_kwargs,
-            mm_missing_kwargs,
-        )
+            mm_missing_kwargs = MultiModalKwargsItems.from_hf_inputs(
+                mm_missing_processed_data,
+                self._get_mm_fields_config(
+                    mm_missing_processed_data, hf_processor_mm_kwargs
+                ),
+            )
+
+            mm_missing_prompt_updates = self._get_mm_prompt_updates(
+                mm_missing_data_items,
+                hf_processor_mm_kwargs,
+                mm_missing_kwargs,
+            )
 
         with timed_preprocessor_operation(self.info.ctx, "cache_lookup"):
             mm_kwargs, mm_prompt_updates = self._merge_mm_kwargs(
