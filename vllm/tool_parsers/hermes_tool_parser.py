@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import json
+import threading
 from collections.abc import Sequence
 
 import partial_json_parser
@@ -31,6 +32,14 @@ logger = init_logger(__name__)
 
 
 class Hermes2ProToolParser(ToolParser):
+    # Class-level cache for tokenized tool call tokens.
+    # The HuggingFace fast tokenizer is not thread-safe (Rust RefCell causes
+    # "RuntimeError: Already borrowed" under concurrent access), so we
+    # encode once per tokenizer under a lock and reuse the results.
+    # See: https://github.com/huggingface/tokenizers/issues/537
+    _token_cache_lock = threading.Lock()
+    _token_cache: dict = {}
+
     def __init__(self, tokenizer: TokenizerLike):
         super().__init__(tokenizer)
 
@@ -60,24 +69,48 @@ class Hermes2ProToolParser(ToolParser):
                 "The model tokenizer must be passed to the ToolParser "
                 "constructor during construction."
             )
-        self.tool_call_start_token_ids = self.model_tokenizer.encode(
-            self.tool_call_start_token, add_special_tokens=False
-        )
-        self.tool_call_end_token_ids = self.model_tokenizer.encode(
-            self.tool_call_end_token, add_special_tokens=False
-        )
 
-        self.tool_call_start_token_array = [
-            self.model_tokenizer.decode([token_id])
-            for token_id in self.tool_call_start_token_ids
-        ]
-
-        self.tool_call_end_token_array = [
-            self.model_tokenizer.decode([token_id])
-            for token_id in self.tool_call_end_token_ids
-        ]
+        cached = self._get_cached_token_ids(self.model_tokenizer)
+        self.tool_call_start_token_ids = cached["start_ids"]
+        self.tool_call_end_token_ids = cached["end_ids"]
+        self.tool_call_start_token_array = cached["start_array"]
+        self.tool_call_end_token_array = cached["end_array"]
 
         self.buffered_delta_text = ""
+
+    @classmethod
+    def _get_cached_token_ids(cls, tokenizer: TokenizerLike) -> dict:
+        """Encode tool call tokens once per tokenizer instance under a lock.
+
+        This avoids concurrent tokenizer.encode() calls which trigger
+        'RuntimeError: Already borrowed' with HF fast tokenizers.
+        """
+        tok_id = id(tokenizer)
+        if tok_id in cls._token_cache:
+            return cls._token_cache[tok_id]
+
+        with cls._token_cache_lock:
+            # Double-check after acquiring lock
+            if tok_id in cls._token_cache:
+                return cls._token_cache[tok_id]
+
+            start_token = "<tool_call>"
+            end_token = "</tool_call>"
+
+            start_ids = tokenizer.encode(start_token,
+                                         add_special_tokens=False)
+            end_ids = tokenizer.encode(end_token,
+                                       add_special_tokens=False)
+            start_array = [tokenizer.decode([tid]) for tid in start_ids]
+            end_array = [tokenizer.decode([tid]) for tid in end_ids]
+
+            cls._token_cache[tok_id] = {
+                "start_ids": start_ids,
+                "end_ids": end_ids,
+                "start_array": start_array,
+                "end_array": end_array,
+            }
+            return cls._token_cache[tok_id]
 
     # Very simple idea: when encountering tokens like <, tool, _call, >,
     # <, /, tool, _call, >, store them in a buffer.
