@@ -80,10 +80,15 @@ class Hermes2ProToolParser(ToolParser):
 
     @classmethod
     def _get_cached_token_ids(cls, tokenizer: TokenizerLike) -> dict:
-        """Encode tool call tokens once per tokenizer instance under a lock.
+        """Look up tool call token IDs, cached per tokenizer instance.
 
-        This avoids concurrent tokenizer.encode() calls which trigger
-        'RuntimeError: Already borrowed' with HF fast tokenizers.
+        Uses the pure-Python ``added_tokens_encoder`` dict when the tokens
+        are registered as special tokens (the common case for hermes models),
+        avoiding the non-thread-safe Rust tokenizer backend entirely.
+        Falls back to ``tokenizer.encode()`` only if the tokens are not
+        in the added vocabulary.
+
+        See: https://github.com/huggingface/tokenizers/issues/537
         """
         tok_id = id(tokenizer)
         if tok_id in cls._token_cache:
@@ -97,12 +102,30 @@ class Hermes2ProToolParser(ToolParser):
             start_token = "<tool_call>"
             end_token = "</tool_call>"
 
-            start_ids = tokenizer.encode(start_token,
-                                         add_special_tokens=False)
-            end_ids = tokenizer.encode(end_token,
-                                       add_special_tokens=False)
-            start_array = [tokenizer.decode([tid]) for tid in start_ids]
-            end_array = [tokenizer.decode([tid]) for tid in end_ids]
+            # Prefer pure-Python dict lookup to avoid concurrent access
+            # to the non-thread-safe Rust tokenizer backend, which races
+            # with the multimodal HF processor on a different lock.
+            added_vocab = getattr(tokenizer, "added_tokens_encoder", {})
+
+            if start_token in added_vocab and end_token in added_vocab:
+                start_ids = [added_vocab[start_token]]
+                end_ids = [added_vocab[end_token]]
+                start_array = [start_token]
+                end_array = [end_token]
+            else:
+                # Fallback for models where these aren't special tokens.
+                start_ids = tokenizer.encode(
+                    start_token, add_special_tokens=False
+                )
+                end_ids = tokenizer.encode(
+                    end_token, add_special_tokens=False
+                )
+                start_array = [
+                    tokenizer.decode([tid]) for tid in start_ids
+                ]
+                end_array = [
+                    tokenizer.decode([tid]) for tid in end_ids
+                ]
 
             cls._token_cache[tok_id] = {
                 "start_ids": start_ids,
