@@ -1691,7 +1691,8 @@ environment_variables: dict[str, Callable[[], Any]] = {
     # of API requests. This is useful for proxy/gateway scenarios where
     # the actual model is served but different names may be used in requests.
     "VLLM_SKIP_MODEL_NAME_VALIDATION": lambda: (
-        os.getenv("VLLM_SKIP_MODEL_NAME_VALIDATION", "0").strip().lower() in ("1", "true")
+        os.getenv("VLLM_SKIP_MODEL_NAME_VALIDATION", "0").strip().lower()
+        in ("1", "true")
     ),
     # Whether it is a scale up launch engine for elastic EP,
     # Should only be set by EngineCoreClient.
