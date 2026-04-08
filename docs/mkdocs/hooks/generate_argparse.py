@@ -85,7 +85,7 @@ def auto_mock(module_name: str, attr: str, max_mocks: int = 100):
             logger.info("Mocking %s for argparse doc generation", e.name)
             sys.modules[e.name] = PydanticMagicMock(name=e.name)
         except Exception:
-            logger.exception("Failed to import %s.%s: %s", module_name, attr)
+            logger.exception("Failed to import %s.%s", module_name, attr)
 
     raise ImportError(
         f"Failed to import {module_name}.{attr} after mocking {max_mocks} imports"
