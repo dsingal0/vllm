@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+import numpy as np
 import torch
 
 from vllm.config import VllmConfig
@@ -31,6 +32,68 @@ class SuffixDecodingProposer:
             max_tree_depth=config.suffix_decoding_max_tree_depth,
             max_cached_requests=config.suffix_decoding_max_cached_requests,
         )
+
+    # --- Scheduler-side helpers for async scheduling ---
+
+    def start_request_scheduler(
+        self,
+        req_id: str,
+        prompt_token_ids: list[int] | torch.Tensor,
+    ) -> None:
+        """Initialize the suffix cache for a request (scheduler-side)."""
+        import numpy as np
+        if isinstance(prompt_token_ids, torch.Tensor):
+            prompt_token_ids = prompt_token_ids.cpu().numpy()
+        if not isinstance(prompt_token_ids, np.ndarray):
+            prompt_token_ids = np.array(prompt_token_ids, dtype=np.int32)
+        elif prompt_token_ids.dtype != np.int32:
+            prompt_token_ids = prompt_token_ids.astype(np.int32)
+        self.suffix_cache.start_request(req_id, prompt_token_ids)
+
+    def update_cache_scheduler(
+        self,
+        req_id: str,
+        sampled_token_ids: list[int],
+    ) -> None:
+        """Update suffix cache with newly sampled tokens (scheduler-side)."""
+        self.suffix_cache.add_active_response(req_id, sampled_token_ids)
+
+    def propose_for_request_scheduler(
+        self,
+        req_id: str,
+        all_token_ids: list[int] | np.ndarray | torch.Tensor,
+        num_tokens: int,
+    ) -> list[int]:
+        """Propose draft tokens for a request using current token state.
+
+        Args:
+            req_id: The request ID.
+            all_token_ids: Full token sequence (prompt + output).
+            num_tokens: Total number of tokens in the sequence.
+        """
+        import numpy as np
+        if isinstance(all_token_ids, torch.Tensor):
+            all_token_ids = all_token_ids.cpu().numpy()
+        if not isinstance(all_token_ids, np.ndarray):
+            all_token_ids = np.array(all_token_ids, dtype=np.int32)
+        elif all_token_ids.dtype != np.int32:
+            all_token_ids = all_token_ids.astype(np.int32)
+
+        start = max(0, num_tokens - self.max_tree_depth)
+        pattern = all_token_ids[start:num_tokens]
+        draft = self.suffix_cache.speculate(
+            req_id,
+            pattern,
+            max_spec_tokens=min(
+                self.num_speculative_tokens,
+                self.max_model_len - num_tokens - 1,
+            ),
+            max_spec_factor=self.max_spec_factor,
+            min_token_prob=self.min_token_prob,
+        )
+        return list(draft.token_ids)
+
+    # --- Original worker-side propose ---
 
     def propose(
         self,
@@ -95,6 +158,10 @@ class SuffixDecodingProposer:
             self.suffix_cache.stop_request(req_id)
 
         return draft_token_ids
+
+    def stop_request_scheduler(self, req_id: str) -> None:
+        """Stop tracking a request in the suffix cache."""
+        self.suffix_cache.stop_request(req_id)
 
     def load_model(self, *args, **kwargs):
         # No model to load.

@@ -782,10 +782,11 @@ class VllmConfig:
                     self.speculative_config.method not in get_args(EagleModelTypes)
                     and self.speculative_config.method not in get_args(NgramGPUTypes)
                     and self.speculative_config.method != "draft_model"
+                    and self.speculative_config.method != "suffix"
                 ):
                     raise ValueError(
                         "Currently, async scheduling is only supported "
-                        "with EAGLE/MTP/Draft Model/NGram GPU kind of "
+                        "with EAGLE/MTP/Draft Model/NGram GPU/Suffix kind of "
                         "speculative decoding"
                     )
                 if self.speculative_config.disable_padded_drafter_batch:
@@ -813,6 +814,7 @@ class VllmConfig:
                 self.speculative_config is not None
                 and self.speculative_config.method not in get_args(EagleModelTypes)
                 and self.speculative_config.method not in get_args(NgramGPUTypes)
+                and self.speculative_config.method != "suffix"
             ):
                 logger.warning_once(
                     "Async scheduling not supported with %s-based "

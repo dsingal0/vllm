@@ -514,6 +514,7 @@ class GPUModelRunner(
         # NOTE(Jiayi): currently we put the entire draft model on
         # the last PP rank. This is not ideal if there are many
         # layers in the draft model.
+        self.drafter = None
         if self.speculative_config and get_pp_group().is_last_rank:
             self.drafter: (
                 NgramProposer  # noqa: F823
@@ -524,7 +525,7 @@ class GPUModelRunner(
                 | DraftModelProposer
                 | MedusaProposer
                 | ExtractHiddenStatesProposer
-            )
+            ) | None
             if self.speculative_config.method == "ngram":
                 from vllm.v1.spec_decode.ngram_proposer import NgramProposer
 
@@ -556,7 +557,8 @@ class GPUModelRunner(
                 self.drafter = DFlashProposer(self.vllm_config, self.device, self)
                 self.use_aux_hidden_state_outputs = True
             elif self.speculative_config.method == "suffix":
-                self.drafter = SuffixDecodingProposer(self.vllm_config)
+                if not self.use_async_scheduling:
+                    self.drafter = SuffixDecodingProposer(self.vllm_config)
             elif self.speculative_config.use_eagle():
                 self.drafter = EagleProposer(self.vllm_config, self.device, self)
                 if self.speculative_config.method == "eagle3":
@@ -4552,11 +4554,17 @@ class GPUModelRunner(
                 self.input_batch.num_reqs,
             )
         elif spec_config.method == "suffix":
-            assert isinstance(sampled_token_ids, list)
-            assert isinstance(self.drafter, SuffixDecodingProposer)
-            draft_token_ids = self.drafter.propose(
-                self.input_batch, sampled_token_ids, slot_mappings=slot_mappings
-            )
+            if self.use_async_scheduling:
+                # In async mode, suffix drafts are generated scheduler-side.
+                # Nothing to do here.
+                draft_token_ids = []
+            else:
+                assert isinstance(sampled_token_ids, list)
+                assert self.drafter is not None
+                assert isinstance(self.drafter, SuffixDecodingProposer)
+                draft_token_ids = self.drafter.propose(
+                    self.input_batch, sampled_token_ids, slot_mappings=slot_mappings
+                )
         elif spec_config.method == "medusa":
             assert isinstance(sampled_token_ids, list)
             assert isinstance(self.drafter, MedusaProposer)
@@ -4772,7 +4780,7 @@ class GPUModelRunner(
                     self.model = self.load_lora_model(
                         self.model, self.vllm_config, self.device
                     )
-                if hasattr(self, "drafter"):
+                if getattr(self, "drafter", None) is not None:
                     logger.info_once("Loading drafter model...")
                     self.drafter.load_model(self.model)
                     if (

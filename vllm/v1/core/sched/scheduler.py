@@ -221,6 +221,17 @@ class Scheduler(SchedulerInterface):
             if speculative_config.uses_draft_model():
                 self.num_lookahead_tokens = self.num_spec_tokens
 
+        # Suffix decoding proposer (scheduler-side for async scheduling).
+        self.suffix_proposer = None
+        if (
+            speculative_config
+            and speculative_config.method == "suffix"
+            and self.scheduler_config.async_scheduling is not False
+        ):
+            from vllm.v1.spec_decode.suffix_decoding import SuffixDecodingProposer
+
+            self.suffix_proposer = SuffixDecodingProposer(vllm_config)
+
         # Create the KV cache manager.
         self.kv_cache_manager = KVCacheManager(
             kv_cache_config=kv_cache_config,
@@ -379,6 +390,32 @@ class Scheduler(SchedulerInterface):
         scheduled_timestamp = time.monotonic()
 
         self.kv_cache_manager.new_step_starts()
+
+        # For suffix decoding with async scheduling, look up draft tokens
+        # for running requests before scheduling.  Cache updates may lag
+        # by one async step, but for prompt-heavy workloads this is fine.
+        if self.suffix_proposer is not None:
+            for request in self.running:
+                if request.is_prefill_chunk:
+                    continue
+                # AsyncScheduler may leave placeholder [-1, ...] tokens here.
+                # Clear them so we can look up real drafts.
+                if request.spec_token_ids and all(
+                    t == -1 for t in request.spec_token_ids
+                ):
+                    request.spec_token_ids = []
+                if request.spec_token_ids:
+                    continue
+                num_tokens = len(request.prompt_token_ids) + len(
+                    request.output_token_ids
+                )
+                draft_tokens = self.suffix_proposer.propose_for_request_scheduler(
+                    request.request_id,
+                    request.prompt_token_ids + request.output_token_ids,
+                    num_tokens,
+                )
+                if draft_tokens:
+                    request.spec_token_ids = draft_tokens
 
         # First, schedule the RUNNING requests.
         req_index = 0
@@ -1402,6 +1439,11 @@ class Scheduler(SchedulerInterface):
                 new_token_ids, stopped = self._update_request_with_output(
                     request, new_token_ids
                 )
+                # Update suffix cache with newly sampled tokens.
+                if self.suffix_proposer is not None:
+                    self.suffix_proposer.update_cache_scheduler(
+                        request.request_id, new_token_ids
+                    )
             elif request.pooling_params and pooler_output is not None:
                 # Pooling stops as soon as there is output.
                 request.status = RequestStatus.FINISHED_STOPPED
@@ -1755,6 +1797,12 @@ class Scheduler(SchedulerInterface):
             self.requests[request.request_id] = request
             if self.log_stats:
                 request.record_event(EngineCoreEventType.QUEUED)
+            # Initialize suffix cache for async scheduling.
+            if self.suffix_proposer is not None:
+                self.suffix_proposer.start_request_scheduler(
+                    request.request_id,
+                    request.prompt_token_ids,
+                )
 
     def finish_requests(
         self, request_ids: str | Iterable[str] | None, finished_status: RequestStatus
@@ -1841,6 +1889,8 @@ class Scheduler(SchedulerInterface):
         assert request.is_finished()
         self.kv_cache_manager.free(request)
         del self.requests[request.request_id]
+        if self.suffix_proposer is not None:
+            self.suffix_proposer.stop_request_scheduler(request.request_id)
 
     @property
     def pause_state(self) -> PauseState:
