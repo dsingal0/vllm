@@ -7,7 +7,7 @@ import signal
 import threading
 import time
 from collections import defaultdict, deque
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Sequence
 from concurrent.futures import Future
 from contextlib import ExitStack, contextmanager
 from enum import IntEnum
@@ -1439,29 +1439,46 @@ class EngineCoreProc(EngineCore):
                     if type_frame.buffer == b"READY":
                         assert input_socket == coord_socket
                         continue
-                    request_type = EngineCoreRequestType(bytes(type_frame.buffer))
+                    request_type: EngineCoreRequestType | None = None
+                    try:
+                        request_type = EngineCoreRequestType(bytes(type_frame.buffer))
 
-                    # Deserialize the request data.
-                    request: Any
-                    if request_type == EngineCoreRequestType.ADD:
-                        req: EngineCoreRequest = add_request_decoder.decode(data_frames)
-                        try:
-                            request = self.preprocess_add_request(req)
-                        except Exception:
-                            self._handle_request_preproc_error(req)
-                            continue
-                    else:
-                        request = generic_decoder.decode(data_frames)
+                        # Deserialize the request data.
+                        request: Any
+                        if request_type == EngineCoreRequestType.ADD:
+                            req: EngineCoreRequest = add_request_decoder.decode(
+                                data_frames
+                            )
+                            try:
+                                request = self.preprocess_add_request(req)
+                            except Exception:
+                                self._handle_request_preproc_error(req)
+                                continue
+                        else:
+                            request = generic_decoder.decode(data_frames)
 
-                        if request_type == EngineCoreRequestType.ABORT:
-                            # Aborts are added to *both* queues, allows us to eagerly
-                            # process aborts while also ensuring ordering in the input
-                            # queue to avoid leaking requests. This is ok because
-                            # aborting in the scheduler is idempotent.
-                            self.aborts_queue.put_nowait(request)
+                            if request_type == EngineCoreRequestType.ABORT:
+                                # Aborts are added to *both* queues, allows us to eagerly
+                                # process aborts while also ensuring ordering in the input
+                                # queue to avoid leaking requests. This is ok because
+                                # aborting in the scheduler is idempotent.
+                                self.aborts_queue.put_nowait(request)
 
-                    # Push to input queue for core busy loop.
-                    self.input_queue.put_nowait((request_type, request))
+                        # Push to input queue for core busy loop.
+                        self.input_queue.put_nowait((request_type, request))
+                    except Exception:
+                        if request_type == EngineCoreRequestType.ADD:
+                            self._handle_add_request_decode_error(data_frames)
+                        elif request_type is None:
+                            logger.exception(
+                                "Failed to decode engine request type: %r",
+                                bytes(type_frame.buffer),
+                            )
+                        else:
+                            logger.exception(
+                                "Failed to process engine request of type %s",
+                                request_type.name,
+                            )
 
     def process_output_sockets(
         self, output_paths: list[str], coord_output_path: str | None, engine_index: int
@@ -1538,6 +1555,54 @@ class EngineCoreProc(EngineCore):
             "Unexpected error pre-processing request %s", request.request_id
         )
         self._send_error_outputs_to_client([request.request_id], request.client_index)
+
+    def _handle_add_request_decode_error(self, data_frames: Sequence[Any]) -> None:
+        """Best-effort recovery for malformed add-request payloads.
+
+        The output processor registers request state before the request is sent to
+        the engine core, so if we can recover the internal request ID from the raw
+        msgpack payload we can fail just that request and keep the input thread
+        alive.
+        """
+        recovered = self._recover_add_request_metadata(data_frames)
+        if recovered is None:
+            logger.exception(
+                "Failed to decode add request and could not recover request metadata"
+            )
+            return
+
+        request_id, client_index = recovered
+        logger.exception("Failed to decode add request %s", request_id)
+        self._send_error_outputs_to_client([request_id], client_index)
+
+    def _recover_add_request_metadata(
+        self, data_frames: Sequence[Any]
+    ) -> tuple[str, int] | None:
+        if not data_frames:
+            return None
+
+        try:
+            request = msgspec.msgpack.decode(data_frames[0])
+        except Exception:
+            return None
+
+        if not isinstance(request, list) or not request:
+            return None
+
+        request_id = request[0]
+        if not isinstance(request_id, str):
+            return None
+
+        # EngineCoreRequest is array_like=True. client_index is a defaulted field,
+        # so it may be omitted from shorter payloads; fall back to client 0.
+        client_index = 0
+        client_index_pos = 11
+        if len(request) > client_index_pos and isinstance(
+            request[client_index_pos], int
+        ):
+            client_index = request[client_index_pos]
+
+        return request_id, client_index
 
     def pause_scheduler(
         self, mode: PauseMode = "abort", clear_cache: bool = True

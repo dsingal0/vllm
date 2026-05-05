@@ -1,13 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import msgspec
 import pytest
 import torch.cuda
 
 from vllm import LLM, SamplingParams
+from vllm.inputs import TokensPrompt
 from vllm.platforms import current_platform
 from vllm.v1.engine import EngineCoreRequest
 from vllm.v1.engine.core import EngineCore
+from vllm.v1.serial_utils import MsgpackEncoder
 
 MODEL_NAME = "hmellor/tiny-random-LlamaForCausalLM"
 
@@ -45,8 +48,6 @@ def test_preprocess_error_handling(monkeypatch: pytest.MonkeyPatch):
 
     # Create a failing request by crafting a request with an invalid token
     # We need to use a direct approach since LLM.generate tokenizes for us
-    from vllm.inputs import TokensPrompt
-
     # This should raise an exception due to the preprocessing failure
     # Special token id to trigger the failure
     failing_prompt = TokensPrompt(prompt_token_ids=[333])
@@ -57,6 +58,60 @@ def test_preprocess_error_handling(monkeypatch: pytest.MonkeyPatch):
     assert outputs[0].outputs[0].finish_reason == "error"
 
     # Verify the engine is still functional with a normal request
+    outputs = llm.generate("Hello, my name is", SamplingParams(max_tokens=10))
+    assert len(outputs) == 1
+    assert len(outputs[0].outputs[0].token_ids) > 0
+    assert outputs[0].outputs[0].finish_reason in ("stop", "length")
+
+
+def test_decode_error_handling(monkeypatch: pytest.MonkeyPatch):
+    """Test that malformed EngineCoreRequest payloads do not kill input IO."""
+
+    if current_platform.is_rocm() or current_platform.is_xpu():
+        pytest.skip(
+            "Skipped on ROCm/XPU: this test only works with 'fork', "
+            "but ROCm/XPU uses 'spawn'."
+        )
+
+    assert not torch.cuda.is_initialized(), (
+        "fork needs to be used for the engine "
+        "core process and this isn't possible if cuda is already initialized"
+    )
+
+    original_encode = MsgpackEncoder.encode
+
+    def conditional_failing_encode(self, obj):
+        if (
+            isinstance(obj, EngineCoreRequest)
+            and obj.prompt_token_ids
+            and obj.prompt_token_ids[0] == 333
+        ):
+            malformed_request = [
+                obj.request_id,
+                333,
+                obj.mm_features,
+                obj.sampling_params,
+                obj.pooling_params,
+                obj.arrival_time,
+                obj.lora_request,
+                obj.cache_salt,
+                obj.data_parallel_rank,
+                obj.prompt_embeds,
+            ]
+            return [msgspec.msgpack.encode(malformed_request)]
+        return original_encode(self, obj)
+
+    monkeypatch.setattr(MsgpackEncoder, "encode", conditional_failing_encode)
+
+    llm = LLM(model=MODEL_NAME)
+
+    failing_prompt = TokensPrompt(prompt_token_ids=[333])
+    outputs = llm.generate(failing_prompt, SamplingParams(max_tokens=10))  # type: ignore
+    assert len(outputs) == 1
+    assert len(outputs[0].outputs[0].token_ids) == 0
+    assert outputs[0].finished
+    assert outputs[0].outputs[0].finish_reason == "error"
+
     outputs = llm.generate("Hello, my name is", SamplingParams(max_tokens=10))
     assert len(outputs) == 1
     assert len(outputs[0].outputs[0].token_ids) > 0
