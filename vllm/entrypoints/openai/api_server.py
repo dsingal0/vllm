@@ -54,6 +54,7 @@ from vllm.entrypoints.utils import (
     log_version_and_model,
     process_lora_modules,
 )
+from vllm.entrypoints.warmup import load_warmup_config, warmup_engine
 from vllm.logger import init_logger
 from vllm.reasoning import ReasoningParserManager
 from vllm.tasks import POOLING_TASKS, SupportedTask
@@ -602,17 +603,17 @@ async def build_and_serve(
     Returns the shutdown task for the caller to await.
     """
 
-    # Get uvicorn log config (from file or with endpoint filter)
-    log_config = get_uvicorn_log_config(args)
-    if log_config is not None:
-        uvicorn_kwargs["log_config"] = log_config
-
     supported_tasks = await engine_client.get_supported_tasks()
     model_config = engine_client.model_config
 
     logger.info("Supported tasks: %s", supported_tasks)
     app = build_app(args, supported_tasks, model_config)
     await init_app_state(engine_client, app.state, args, supported_tasks)
+
+    # Get uvicorn log config (from file or with endpoint filter)
+    log_config = get_uvicorn_log_config(args)
+    if log_config is not None:
+        uvicorn_kwargs["log_config"] = log_config
 
     logger.info("Starting vLLM server on %s", listen_address)
 
@@ -708,10 +709,14 @@ async def run_server_worker(
         args,
         client_config=client_config,
     ) as engine_client:
+        warmup_cfg = load_warmup_config(args.warmup_config)
+        if warmup_cfg is not None:
+            await warmup_engine(engine_client, warmup_cfg)
+
         shutdown_task = await build_and_serve(
             engine_client, listen_address, sock, args, **uvicorn_kwargs
         )
-    # NB: Await server shutdown only after the backend context is exited
+
     try:
         await shutdown_task
     finally:
