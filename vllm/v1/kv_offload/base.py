@@ -92,11 +92,29 @@ class PrepareStoreOutput:
 
 
 @dataclass
+class BlockEnrichment:
+    """Per-batch enrichment data for BlockStored events.
+
+    Carries token and block metadata from the scheduler so that
+    CPU offloading events can be enriched with the same fields
+    that GPU KV cache events already provide.
+    """
+
+    token_ids: list[int]
+    parent_block_hash: bytes | None
+    block_size: int
+    lora_id: int | None = None
+    lora_name: str | None = None
+
+
+@dataclass
 class OffloadingEvent:
     keys: list[OffloadKey]
     medium: str
     # True if blocks are removed, False if stored
     removed: bool
+    # Enrichment for stored events (BlockStored); None for removed events
+    enrichment: BlockEnrichment | None = None
 
 
 """

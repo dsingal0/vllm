@@ -10,6 +10,7 @@ from vllm.distributed.kv_transfer.kv_connector.v1.offloading.metrics import (
     OffloadingConnectorStats,
 )
 from vllm.v1.kv_offload.base import (
+    BlockEnrichment,
     LoadStoreSpec,
     OffloadingEvent,
     OffloadingManager,
@@ -217,6 +218,7 @@ class CPUOffloadingManager(OffloadingManager):
         keys: Collection[OffloadKey],
         req_context: ReqContext,
         success: bool = True,
+        enrichment: BlockEnrichment | None = None,
     ) -> None:
         stored_keys: list[OffloadKey] = []
 
@@ -239,6 +241,7 @@ class CPUOffloadingManager(OffloadingManager):
                     keys=stored_keys,
                     medium=self.medium,
                     removed=False,
+                    enrichment=enrichment,
                 )
             )
 

@@ -29,6 +29,7 @@ from vllm.v1.kv_cache_interface import (
     SlidingWindowSpec,
 )
 from vllm.v1.kv_offload.base import (
+    BlockEnrichment,
     GPULoadStoreSpec,
     OffloadingManager,
     OffloadingSpec,
@@ -62,6 +63,8 @@ class TransferJobStatus:
     # Store src block IDs that may be freed before the request finishes.
     # Registered in _block_id_to_pending_jobs at store creation time.
     sliding_window_block_ids: list[int] | None = None
+    # Enrichment for KV events (BlockStored) computed at store creation time.
+    store_enrichment: BlockEnrichment | None = None
 
 
 class GroupOffloadConfig(NamedTuple):
@@ -864,6 +867,10 @@ class OffloadingConnectorScheduler:
             )
             dst_spec = store_output.store_spec
 
+            store_enrichment = self._compute_store_enrichment(
+                req_status.req, req_status, num_offloadable_tokens
+            )
+
             job_id = self._generate_job_id()
             # a store can only be issued when no load is pending.
             if req_status.transfer_jobs:
@@ -885,6 +892,7 @@ class OffloadingConnectorScheduler:
                 is_store=True,
                 non_sliding_window_block_ids=non_sliding_window_block_ids,
                 sliding_window_block_ids=sliding_window_block_ids or None,
+                store_enrichment=store_enrichment,
             )
 
             store_jobs[job_id] = TransferJob(
@@ -1010,7 +1018,11 @@ class OffloadingConnectorScheduler:
 
             req_status = self._req_status[job_status.req_id]
             if job_status.is_store:
-                self.manager.complete_store(job_status.keys, req_status.req_context)
+                self.manager.complete_store(
+                    job_status.keys,
+                    req_status.req_context,
+                    enrichment=job_status.store_enrichment,
+                )
             else:
                 self.manager.complete_load(job_status.keys, req_status.req_context)
                 if self._blocks_being_loaded:
@@ -1080,6 +1092,39 @@ class OffloadingConnectorScheduler:
                 self._block_id_to_pending_jobs.setdefault(bid, set()).add(job_id)
         return False, None
 
+    @staticmethod
+    def _compute_store_enrichment(
+        req: Request,
+        req_status: RequestOffloadState,
+        num_offloadable_tokens: int,
+    ) -> BlockEnrichment:
+        """Compute KV event enrichment from the first group's block metadata."""
+        first_grp = req_status.config.kv_group_configs[0]
+        first_state = req_status.group_states[0]
+        block_size = first_grp.offloaded_block_size
+
+        start_block_idx = first_state.next_stored_block_idx
+        end_block_idx = num_offloadable_tokens // block_size
+        end_block_idx = min(end_block_idx, len(first_state.offload_keys))
+
+        start_token = start_block_idx * block_size
+        end_token = min(end_block_idx * block_size, len(req.all_token_ids))
+        token_ids = req.all_token_ids[start_token:end_token]
+
+        parent_block_hash: bytes | None = None
+        if start_block_idx > 0 and start_block_idx <= len(first_state.offload_keys):
+            parent_block_hash = get_offload_block_hash(
+                first_state.offload_keys[start_block_idx - 1]
+            )
+
+        return BlockEnrichment(
+            token_ids=token_ids,
+            parent_block_hash=parent_block_hash,
+            block_size=block_size,
+            lora_id=req.lora_request.adapter_id if req.lora_request else None,
+            lora_name=req.lora_request.name if req.lora_request else None,
+        )
+
     def take_events(self) -> Iterable[KVCacheEvent]:
         """Take the KV cache events from the connector.
 
@@ -1091,14 +1136,17 @@ class OffloadingConnectorScheduler:
             if event.removed:
                 yield BlockRemoved(block_hashes=block_hashes, medium=event.medium)
             else:
+                enrichment = event.enrichment
                 yield BlockStored(
                     block_hashes=block_hashes,
-                    parent_block_hash=None,
-                    token_ids=[],
-                    lora_id=None,
-                    block_size=0,
+                    parent_block_hash=enrichment.parent_block_hash
+                    if enrichment
+                    else None,
+                    token_ids=enrichment.token_ids if enrichment else [],
+                    lora_id=enrichment.lora_id if enrichment else None,
+                    block_size=enrichment.block_size if enrichment else 0,
                     medium=event.medium,
-                    lora_name=None,
+                    lora_name=enrichment.lora_name if enrichment else None,
                 )
 
     def reset_cache(self) -> None:
