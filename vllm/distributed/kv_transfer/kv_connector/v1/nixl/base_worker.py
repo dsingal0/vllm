@@ -281,6 +281,45 @@ class NixlBaseConnectorWorker:
             for group in kv_cache_config.kv_cache_groups
             for layer in group.layer_names
         }
+
+        # Spec-decode draft layers (EAGLE/MTP) use incompatible KV layouts;
+        # exclude them from NIXL registration (they run locally on P/D).
+        skipped_draft_layers: list[str] = []
+        spec_config = vllm_config.speculative_config
+        if spec_config is not None and spec_config.use_eagle():
+            for group in kv_cache_config.kv_cache_groups:
+                if group.is_eagle_group:
+                    for layer_name in group.layer_names:
+                        if layer_name in self._layer_specs:
+                            skipped_draft_layers.append(layer_name)
+                            del self._layer_specs[layer_name]
+            if not skipped_draft_layers:
+                hf_config = vllm_config.model_config.hf_config
+                text_config = getattr(hf_config, "text_config", hf_config)
+                num_hidden = getattr(text_config, "num_hidden_layers", None)
+                num_mtp = getattr(text_config, "num_mtp_modules", 1)
+                if num_hidden is not None:
+                    for mtp_idx in range(num_hidden, num_hidden + num_mtp):
+                        draft_marker = f".layers.{mtp_idx}."
+                        for layer_name in list(self._layer_specs):
+                            if draft_marker in layer_name and (
+                                ".self_attn.attn" in layer_name
+                                or ".self_attn." in layer_name
+                            ):
+                                skipped_draft_layers.append(layer_name)
+                                del self._layer_specs[layer_name]
+                # Fallback: EAGLE3 draft attn on MiniMax-M3.
+                for layer_name in list(self._layer_specs):
+                    if layer_name.endswith("layers.60.self_attn.attn"):
+                        skipped_draft_layers.append(layer_name)
+                        del self._layer_specs[layer_name]
+        if skipped_draft_layers:
+            logger.info(
+                "NixlConnector: skipping spec-decode draft KV cache layers %s "
+                "(not transferred between P and D workers).",
+                skipped_draft_layers,
+            )
+
         self.hma_group_size = len(kv_cache_config.kv_cache_tensors)
 
         # ---- Model state (derived from model config) ----
