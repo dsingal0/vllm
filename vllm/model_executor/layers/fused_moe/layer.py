@@ -331,6 +331,18 @@ def FusedMoE(
         # since model_config is not set in the pytest test.
         moe_in_dtype = params_dtype
 
+    # Prefer modular experts when routed-experts capture is on (or when the
+    # user opts in via KernelConfig / VLLM_MOE_PREFER_MODULAR). Monolithic
+    # TRTLLM kernels skip router.select_experts and leave capture all-zeros.
+    prefer_modular_kernel = bool(
+        getattr(vllm_config.kernel_config, "moe_prefer_modular", False)
+        or envs.VLLM_MOE_PREFER_MODULAR
+        or (
+            vllm_config.model_config is not None
+            and vllm_config.model_config.enable_return_routed_experts
+        )
+    )
+
     moe_config = FusedMoEConfig(
         num_experts=global_num_experts,
         experts_per_token=top_k,
@@ -342,6 +354,7 @@ def FusedMoE(
         moe_parallel_config=moe_parallel_config,
         in_dtype=moe_in_dtype,
         moe_backend=vllm_config.kernel_config.moe_backend,
+        prefer_modular_kernel=prefer_modular_kernel,
         router_logits_dtype=router_logits_dtype,
         max_num_tokens=max_num_batched_tokens,
         has_bias=has_bias,

@@ -14,6 +14,7 @@ from vllm.model_executor.layers.fused_moe import (
     FusedMoEConfig,
     RoutedExperts,
 )
+from vllm.model_executor.layers.fused_moe.oracle.base import order_experts_cls
 from vllm.model_executor.layers.fused_moe.all2all_utils import (
     maybe_make_prepare_finalize,
 )
@@ -408,7 +409,9 @@ def _return_or_raise(
     scope: Literal["process", "global", "local"] = "local",
 ) -> tuple[Mxfp4MoeBackend, type[mk.FusedMoEExperts]]:
     reason: str | None = None
-    for k_cls in backend_to_kernel_cls(backend):
+    for k_cls in order_experts_cls(
+        backend_to_kernel_cls(backend), config.prefer_modular_kernel
+    ):
         supported, reason = k_cls.is_supported_config(
             k_cls, config, weight_key, activation_key, activation_format
         )
@@ -506,7 +509,9 @@ def select_mxfp4_moe_backend(
             if requested_activation_key is not None
             else _backend_activation_key(backend)
         )
-        for k_cls in backend_to_kernel_cls(backend):
+        for k_cls in order_experts_cls(
+            backend_to_kernel_cls(backend), config.prefer_modular_kernel
+        ):
             supported, reason = k_cls.is_supported_config(
                 k_cls, config, kMxfp4Static, act_key, activation_format
             )
@@ -614,7 +619,9 @@ def select_deepseek_v4_mxfp4_moe_backend(
     # Iterate priority backends: TRTLLM MXFP8, then Triton.
     for backend in priority_backends:
         activation_key = _backend_activation_key(backend)
-        for k_cls in backend_to_kernel_cls(backend):
+        for k_cls in order_experts_cls(
+            backend_to_kernel_cls(backend), config.prefer_modular_kernel
+        ):
             supported, reason = k_cls.is_supported_config(
                 k_cls, config, kMxfp4Static, activation_key, activation_format
             )

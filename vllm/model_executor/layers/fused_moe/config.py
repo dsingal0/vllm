@@ -1283,6 +1283,13 @@ class FusedMoEConfig:
     intermediate_pad: int | None = None
 
     moe_backend: MoEBackend = "auto"
+    # When True, MoE kernel oracles try modular expert implementations
+    # (precomputed topk_ids via router.select_experts) before monolithic
+    # fused-route kernels. Required for enable_return_routed_experts capture
+    # on backends such as FlashInfer TRTLLM that default to monolithic.
+    # Set automatically when return-routed-experts is on, via
+    # --moe-prefer-modular, or VLLM_MOE_PREFER_MODULAR=1.
+    prefer_modular_kernel: bool = False
     max_num_tokens: int = SchedulerConfig.DEFAULT_MAX_NUM_BATCHED_TOKENS_FOR_BATCHED_DP
     has_bias: bool = False
     is_lora_enabled: bool = False

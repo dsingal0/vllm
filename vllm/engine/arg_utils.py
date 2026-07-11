@@ -489,6 +489,7 @@ class EngineArgs:
     enable_expert_parallel: bool = ParallelConfig.enable_expert_parallel
     enable_ep_weight_filter: bool = ParallelConfig.enable_ep_weight_filter
     moe_backend: MoEBackend = KernelConfig.moe_backend
+    moe_prefer_modular: bool = KernelConfig.moe_prefer_modular
     linear_backend: LinearBackend = KernelConfig.linear_backend
     all2all_backend: All2AllBackend = ParallelConfig.all2all_backend
     enable_elastic_ep: bool = ParallelConfig.enable_elastic_ep
@@ -1507,6 +1508,10 @@ class EngineArgs:
         moe_backend_kwargs = kernel_kwargs["moe_backend"]
         moe_backend_kwargs["type"] = lambda s: s.lower().replace("-", "_")
         kernel_group.add_argument("--moe-backend", **moe_backend_kwargs)
+        kernel_group.add_argument(
+            "--moe-prefer-modular",
+            **kernel_kwargs["moe_prefer_modular"],
+        )
         linear_backend_kwargs = kernel_kwargs["linear_backend"]
         linear_backend_kwargs["type"] = lambda s: s.lower().replace("-", "_")
         kernel_group.add_argument("--linear-backend", **linear_backend_kwargs)
@@ -2279,6 +2284,8 @@ class EngineArgs:
             kernel_config.enable_flashinfer_autotune = self.enable_flashinfer_autotune
         if self.moe_backend != "auto":
             kernel_config.moe_backend = self.moe_backend
+        if self.moe_prefer_modular:
+            kernel_config.moe_prefer_modular = True
         if self.linear_backend != "auto":
             kernel_config.linear_backend = self.linear_backend
 

@@ -17,6 +17,7 @@ from vllm.model_executor.layers.fused_moe.config import (
     nvfp4_moe_quant_config,
     nvfp4_w4a16_moe_quant_config,
 )
+from vllm.model_executor.layers.fused_moe.oracle.base import order_experts_cls
 from vllm.model_executor.layers.fused_moe.routed_experts import RoutedExperts
 from vllm.model_executor.layers.quantization.utils.flashinfer_fp4_moe import (
     prepare_nvfp4_moe_layer_for_fi_or_cutlass,
@@ -231,7 +232,9 @@ def select_nvfp4_moe_backend(
         activation_key: QuantKey | None,
         activation_format: mk.FusedMoEActivationFormat,
     ) -> tuple[NvFp4MoeBackend, type[mk.FusedMoEExperts]]:
-        for k_cls in backend_to_kernel_cls(backend):
+        for k_cls in order_experts_cls(
+            backend_to_kernel_cls(backend), config.prefer_modular_kernel
+        ):
             supported, reason = k_cls.is_supported_config(
                 k_cls, config, weight_key, activation_key, activation_format
             )
@@ -273,7 +276,9 @@ def select_nvfp4_moe_backend(
 
     # Select kernels in order of backend.
     for backend in AVAILABLE_BACKENDS:
-        for k_cls in backend_to_kernel_cls(backend):
+        for k_cls in order_experts_cls(
+            backend_to_kernel_cls(backend), config.prefer_modular_kernel
+        ):
             supported, reason = k_cls.is_supported_config(
                 k_cls,
                 config,

@@ -21,6 +21,7 @@ pre-class code.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from enum import Enum
 from typing import TYPE_CHECKING, Generic, TypeVar
 
@@ -28,6 +29,7 @@ import torch
 
 import vllm.model_executor.layers.fused_moe.modular_kernel as mk
 from vllm.config.kernel import MoEBackend
+from vllm.logger import init_logger
 from vllm.model_executor.layers.fused_moe.config import (
     FusedMoEConfig,
     FusedMoEQuantConfig,
@@ -36,7 +38,67 @@ from vllm.model_executor.layers.fused_moe.config import (
 if TYPE_CHECKING:
     from vllm.model_executor.layers.quantization.utils.quant_utils import QuantKey
 
+logger = init_logger(__name__)
+
 BackendT = TypeVar("BackendT", bound=Enum)
+
+
+def order_experts_cls(
+    experts_classes: Sequence[type[mk.FusedMoEExperts]],
+    prefer_modular: bool,
+) -> list[type[mk.FusedMoEExperts]]:
+    """Order expert kernel classes for oracle selection.
+
+    When ``prefer_modular`` is True and this backend exposes at least one
+    modular experts class, **monolithic** classes are dropped from the
+    candidate list for that backend. That lets the oracle fall through to
+    the next backend (e.g. Triton) when FlashInfer TRTLLM modular is
+    unsupported (common on TP=1, where modular BF16 TRTLLM requires
+    all2all) instead of silently selecting monolithic TRTLLM — which
+    routes inside the fused op and leaves
+    ``enable_return_routed_experts`` capture all zeros.
+
+    Modular kernels receive precomputed ``topk_ids`` from
+    :meth:`FusedMoERouter.select_experts`, which is what
+    :class:`RoutedExpertsCapturer` hooks into.
+
+    If a backend has only monolithic classes, they are kept so selection
+    does not become empty.
+
+    Relative order within modular / remaining groups is preserved.
+    """
+    classes = list(experts_classes)
+    if not prefer_modular or len(classes) <= 1:
+        return classes
+
+    modular: list[type[mk.FusedMoEExperts]] = []
+    monolithic: list[type[mk.FusedMoEExperts]] = []
+    other: list[type[mk.FusedMoEExperts]] = []
+    for cls in classes:
+        if issubclass(cls, mk.FusedMoEExpertsModular):
+            modular.append(cls)
+        elif issubclass(cls, mk.FusedMoEExpertsMonolithic):
+            monolithic.append(cls)
+        else:
+            other.append(cls)
+
+    if not modular:
+        # Backend has no modular option; keep original order.
+        return classes
+
+    # Drop monolithic so unsupported modular does not fall back to mono
+    # within the same backend (which would break routed-experts capture).
+    ordered = modular + other
+    if ordered != classes:
+        logger.info_once(
+            "Preferring modular MoE experts "
+            "(prefer_modular_kernel=True); skipping monolithic for this "
+            "backend if modular candidates exist: tried_order=%s "
+            "skipped_monolithic=%s",
+            [c.__name__ for c in ordered],
+            [c.__name__ for c in monolithic],
+        )
+    return ordered
 
 
 class MoEKernelOracle(ABC, Generic[BackendT]):

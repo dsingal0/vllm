@@ -19,7 +19,10 @@ from vllm.model_executor.layers.fused_moe.config import (
     FusedMoEConfig,
     FusedMoEQuantConfig,
 )
-from vllm.model_executor.layers.fused_moe.oracle.base import MoEKernelOracle
+from vllm.model_executor.layers.fused_moe.oracle.base import (
+    MoEKernelOracle,
+    order_experts_cls,
+)
 from vllm.model_executor.layers.quantization.utils.flashinfer_utils import (
     align_moe_weights_for_fi,
     convert_moe_weights_to_flashinfer_trtllm_block_layout,
@@ -224,7 +227,9 @@ def select_unquantized_moe_backend(
         activation_format: mk.FusedMoEActivationFormat,
     ) -> tuple[UnquantizedMoeBackend, type[mk.FusedMoEExperts] | None]:
         reason = None
-        for k_cls in backend_to_kernel_cls(backend):
+        for k_cls in order_experts_cls(
+            backend_to_kernel_cls(backend), config.prefer_modular_kernel
+        ):
             supported, reason = k_cls.is_supported_config(
                 k_cls, config, None, None, activation_format
             )
@@ -256,7 +261,9 @@ def select_unquantized_moe_backend(
             return _return_or_raise(backend, moe_config, activation_format)
 
     for backend in AVAILABLE_BACKENDS:
-        for k_cls in backend_to_kernel_cls(backend):
+        for k_cls in order_experts_cls(
+            backend_to_kernel_cls(backend), moe_config.prefer_modular_kernel
+        ):
             supported, reason = k_cls.is_supported_config(
                 k_cls, moe_config, None, None, activation_format
             )

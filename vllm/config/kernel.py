@@ -201,6 +201,18 @@ class KernelConfig:
                    running QDQ on activations.
     """
 
+    moe_prefer_modular: bool = False
+    """Prefer modular MoE expert kernels over monolithic fused-route kernels.
+
+    Modular kernels run ``router.select_experts`` and pass precomputed
+    ``topk_ids`` into the expert op. That is required for
+    ``--enable-return-routed-experts`` capture: monolithic TRTLLM kernels
+    route inside the fused op and leave the capture buffer all zeros.
+
+    Also enabled automatically when ``enable_return_routed_experts`` is on,
+    or via env ``VLLM_MOE_PREFER_MODULAR=1``. CLI: ``--moe-prefer-modular``.
+    """
+
     linear_backend: LinearBackend = "auto"
     """Backend for quantized linear layer GEMM kernels. Available options:
 

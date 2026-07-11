@@ -185,6 +185,9 @@ if TYPE_CHECKING:
     VLLM_TPU_USING_PATHWAYS: bool = False
     VLLM_USE_DEEP_GEMM: bool = True
     VLLM_MOE_USE_DEEP_GEMM: bool = True
+    # Prefer modular MoE experts (router.select_experts) over monolithic
+    # fused-route kernels. Also auto-enabled when return-routed-experts is on.
+    VLLM_MOE_PREFER_MODULAR: bool = False
     VLLM_USE_DEEP_GEMM_E8M0: bool = True
     VLLM_USE_DEEP_GEMM_TMA_ALIGNED_SCALES: bool = True
     VLLM_DEEP_GEMM_WARMUP: Literal[
@@ -1478,6 +1481,11 @@ environment_variables: dict[str, Callable[[], Any]] = {
     # Allow use of DeepGemm specifically for MoE fused ops (overrides only MoE).
     "VLLM_MOE_USE_DEEP_GEMM": lambda: bool(
         int(os.getenv("VLLM_MOE_USE_DEEP_GEMM", "1"))
+    ),
+    # Prefer modular MoE expert kernels over monolithic (see KernelConfig.moe_prefer_modular).
+    # Also auto-enabled when --enable-return-routed-experts is set.
+    "VLLM_MOE_PREFER_MODULAR": lambda: bool(
+        int(os.getenv("VLLM_MOE_PREFER_MODULAR", "0"))
     ),
     # Whether to use E8M0 scaling when DeepGEMM is used on Blackwell GPUs.
     "VLLM_USE_DEEP_GEMM_E8M0": lambda: bool(
