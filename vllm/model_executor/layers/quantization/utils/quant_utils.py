@@ -514,14 +514,17 @@ def is_layer_skipped(
     *,
     skip_with_substr: bool = False,
 ) -> bool:
-    def prefix_full_match(prefix: str, ignored_layers: list[str]) -> bool:
-        return prefix in ignored_layers
+    def prefix_match(prefix: str, ignored_layers: list[str]) -> bool:
+        return any(
+            prefix == layer or prefix.startswith(f"{layer}.")
+            for layer in ignored_layers
+        )
 
     # For case like: ignored_layers = ["self_attn"]
     def substr_match(prefix: str, ignored_layers: list[str]) -> bool:
         return any(layer in prefix for layer in ignored_layers)
 
-    match_func = substr_match if skip_with_substr else prefix_full_match
+    match_func = substr_match if skip_with_substr else prefix_match
 
     # prefix: model.layers.0.self_attn.q_proj
     # proj_name: q_proj
